@@ -1,0 +1,153 @@
+name: DAM Playwright Tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  playwright_tests:
+    name: DAM End-to-end UI Test
+    runs-on: ubuntu-latest
+
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: unopim
+        ports:
+          - 3306
+        options: >-
+          --health-cmd="mysqladmin ping"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=5
+
+    env:
+      UNOPIM_URL: ${{ secrets.UNOPIM_URL }}
+      ADMIN_USERNAME: ${{ secrets.ADMIN_USERNAME }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD }}
+
+    steps:
+      # ------------------------------------------------------
+      # Checkout DAM repository
+      # ------------------------------------------------------
+      - name: Checkout DAM repository
+        uses: actions/checkout@v4
+        with:
+          path: dam
+
+      # ------------------------------------------------------
+      # Checkout UnoPim repository
+      # ------------------------------------------------------
+      - name: Checkout UnoPim repository
+        uses: actions/checkout@v4
+        with:
+          repository: unopim/unopim
+          ref: master
+          path: unopim
+
+      # ------------------------------------------------------
+      # Setup PHP
+      # ------------------------------------------------------
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          extensions: curl, fileinfo, gd, intl, mbstring, openssl, pdo, pdo_mysql, tokenizer, zip
+          tools: composer:v2
+          ini-values: error_reporting=E_ALL
+
+      # ------------------------------------------------------
+      # Move DAM into UnoPim packages directory
+      # ------------------------------------------------------
+      - name: Attach DAM to UnoPim
+        run: |
+          mkdir -p unopim/packages/Webkul
+          mv dam unopim/packages/Webkul/DAM
+
+      # ------------------------------------------------------
+      # Install UnoPim dependencies
+      # ------------------------------------------------------
+      - name: Install UnoPim dependencies
+        working-directory: unopim
+        run: composer install
+
+      # ------------------------------------------------------
+      # Configure environment
+      # ------------------------------------------------------
+      - name: Configure UnoPim environment
+        working-directory: unopim
+        run: |
+          cp .env.example .env
+          sed -i "s|^\(APP_ENV=\s*\).*$|\1testing|" .env
+          sed -i "s|^\(DB_HOST=\s*\).*$|\1127.0.0.1|" .env
+          sed -i "s|^\(DB_PORT=\s*\).*$|\1${{ job.services.mysql.ports['3306'] }}|" .env
+          sed -i "s|^\(DB_DATABASE=\s*\).*$|\1unopim|" .env
+          sed -i "s|^\(DB_USERNAME=\s*\).*$|\1root|" .env
+          sed -i "s|^\(DB_PASSWORD=\s*\).*$|\1root|" .env
+          cat .env
+
+      # ------------------------------------------------------
+      # Install UnoPim + DAM
+      # ------------------------------------------------------
+      - name: Install UnoPim & DAM
+        working-directory: unopim
+        run: |
+          php artisan unopim:install --skip-env-check --skip-admin-creation
+          php artisan migrate --force
+          php artisan migrate:fresh --seed
+          php artisan dam:install
+          php artisan serve --host=0.0.0.0 --port=8000 &
+
+      # ------------------------------------------------------
+      # Wait for application
+      # ------------------------------------------------------
+      - name: Wait for UnoPim to start
+        run: npx wait-on http://localhost:8000
+
+      # ------------------------------------------------------
+      # Setup Node.js
+      # ------------------------------------------------------
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      # ------------------------------------------------------
+      # Install Playwright dependencies
+      # ------------------------------------------------------
+      - name: Install Playwright dependencies
+        working-directory: unopim/packages/Webkul/DAM/tests/e2e-pw
+        run: |
+          npm install
+          npx playwright install-deps chromium
+          npx playwright install chromium
+
+      # ------------------------------------------------------
+      # Start queue worker
+      # ------------------------------------------------------
+      - name: Start Queue Worker
+        working-directory: unopim
+        run: php artisan queue:work &
+
+      # ------------------------------------------------------
+      # Run Playwright tests
+      # ------------------------------------------------------
+      - name: Run DAM Playwright tests
+        working-directory: unopim/packages/Webkul/DAM/tests/e2e-pw
+        run: npx playwright test --reporter=list
+
+      # ------------------------------------------------------
+      # Upload Playwright report
+      # ------------------------------------------------------
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: unopim/packages/Webkul/DAM/tests/e2e-pw/playwright-report
+
