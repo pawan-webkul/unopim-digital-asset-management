@@ -137,7 +137,7 @@ jobs:
       # Install Playwright dependencies
       # --------------------------------------------------
       - name: Install Playwright
-        working-directory: unopim/packages/Webkul/DAM/tests
+        working-directory: unopim/packages/Webkul/DAM/tests/e2e-pw
         run: |
           npm install
           npx playwright install-deps chromium
@@ -154,7 +154,7 @@ jobs:
       # Run DAM Playwright tests
       # --------------------------------------------------
       - name: Run DAM Playwright tests
-        working-directory: unopim/packages/Webkul/DAM/tests
+        working-directory: unopim/packages/Webkul/DAM/tests/e2e-pw
         run: npx playwright test --reporter=list
 
       # --------------------------------------------------
